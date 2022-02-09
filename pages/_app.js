@@ -1,77 +1,84 @@
+import { useMemo } from "react";
 import ApolloClient from "apollo-boost";
 import { ApolloProvider } from "react-apollo";
-import App from "next/app";
-import { AppProvider } from "@shopify/polaris";
-import { Provider, useAppBridge } from "@shopify/app-bridge-react";
-import { authenticatedFetch } from "@shopify/app-bridge-utils";
-import { Redirect } from "@shopify/app-bridge/actions";
+import NextApp from "next/app";
+import { AppProvider as PolarisAppProvider } from "@shopify/polaris";
+import {
+  Provider as AppBridgeProvider,
+  useAppBridge,
+} from "@shopify/app-bridge-react";
 import "@shopify/polaris/dist/styles.css";
 import translations from "@shopify/polaris/locales/en.json";
+import { fetch } from "lib/app-bridge";
+import { RoutePropagator, Link } from "components";
+import { useRouteChangeLoader } from "hooks";
+import styles from "./_app.module.css";
+import "./styles.css";
 
-function userLoggedInFetch(app) {
-  const fetchFunction = authenticatedFetch(app);
-
-  return async (uri, options) => {
-    const response = await fetchFunction(uri, options);
-
-    if (
-      response.headers.get("X-Shopify-API-Request-Failure-Reauthorize") === "1"
-    ) {
-      const authUrlHeader = response.headers.get(
-        "X-Shopify-API-Request-Failure-Reauthorize-Url"
-      );
-
-      const redirect = Redirect.create(app);
-      redirect.dispatch(Redirect.Action.APP, authUrlHeader || `/auth`);
-      return null;
-    }
-
-    return response;
-  };
-}
-
-function MyProvider(props) {
+/**
+ * React Apollo Context Provider configuration
+ * Done as a separate component so we could use App Bridge Context
+ * App Bridge is configured and made available bellow in App component
+ *
+ * More on Apollo Context Provider:
+ * https://www.apollographql.com/docs/react/api/react/hooks/#the-apolloprovider-component
+ */
+function ConfiguredApolloProvider({ children }) {
   const app = useAppBridge();
 
-  const client = new ApolloClient({
-    fetch: userLoggedInFetch(app),
-    fetchOptions: {
-      credentials: "include",
-    },
-  });
-
-  const Component = props.Component;
-
-  return (
-    <ApolloProvider client={client}>
-      <Component {...props} />
-    </ApolloProvider>
+  const client = useMemo(
+    () =>
+      new ApolloClient({
+        // configuring custom fetch so we could have reusable App Bridge logic on requests
+        fetch: fetch(app),
+        fetchOptions: {
+          credentials: "include",
+        },
+      }),
+    [app]
   );
+
+  useRouteChangeLoader();
+
+  return <ApolloProvider client={client}>{children}</ApolloProvider>;
 }
 
-class MyApp extends App {
+/**
+ * App configuration for every page in our app
+ * Here we configure App Bridge context provider so every page could use it
+ *
+ * App Brige allows to customize Shopify Admin beyond your app
+ * More on App Bridge: https://shopify.dev/tools/app-bridge
+ */
+class App extends NextApp {
   render() {
     const { Component, pageProps, host } = this.props;
+
     return (
-      <AppProvider i18n={translations}>
-        <Provider
-          config={{
-            apiKey: API_KEY,
-            host: host,
-            forceRedirect: true,
-          }}
-        >
-          <MyProvider Component={Component} {...pageProps} />
-        </Provider>
-      </AppProvider>
+      <AppBridgeProvider
+        config={{
+          host: host,
+          apiKey: API_KEY,
+          forceRedirect: true,
+        }}
+      >
+        <RoutePropagator />
+        <PolarisAppProvider i18n={translations} linkComponent={Link}>
+          <ConfiguredApolloProvider>
+            <div className={styles.PageWrapper}>
+              <Component {...pageProps} />
+            </div>
+          </ConfiguredApolloProvider>
+        </PolarisAppProvider>
+      </AppBridgeProvider>
     );
   }
 }
 
-MyApp.getInitialProps = async ({ ctx }) => {
+App.getInitialProps = async ({ ctx }) => {
   return {
     host: ctx.query.host,
   };
 };
 
-export default MyApp;
+export default App;
